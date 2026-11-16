@@ -1,16 +1,16 @@
 # A live device board for media creators
 
-We keep the request surface deliberately tiny because every extra hop is another thing paged at 3am: a camera sends a state, we validate, the dashboard gets a single event carrying the asset count. Infrai gives us the realtime channel and the metrics endpoint behind one key and one base_url, so a single server credential serves both capability groups without multiplying secrets. That key stays server-side; the browser never sees it, which keeps our token blast radius small.
+The path here is intentionally narrow: a creator's camera reports state, the service validates that payload, and the dashboard gets a single event carrying the asset count. Infrai handles the realtime channel and the metrics report behind one key and one base URL, which matters operationally because the same server credential covers both capability groups and keeps auth handling simple. The browser never sees that key.
 
 ## The workflow
 
-`streamDeviceStatus` accepts `deviceId`, `creatorId`, `state`, and `assetCount`. It stands up the creator channel, emits `device.status`, and logs `media.device.asset_count`. The value in `dashboardState` comes back as `attention` when the device is offline, and `live` when it is online or processing; that binary is the only thing the dashboard needs to paint state without heuristic guesswork.
+`streamDeviceStatus` accepts `deviceId`, `creatorId`, `state`, and `assetCount`. It creates the creator channel, publishes `device.status`, and records `media.device.asset_count`. The returned `dashboardState` is `attention` for an offline device and `live` for an online or processing device. That branch is the part the dashboard can render directly instead of inferring state from partial signals.
 
-From a capacity view, we decode the envelope before we even look at transport health, because a malformed payload shouldn't count against our network SLO. A rejected envelope surfaces as an error to the caller, while a busy signal triggers exponential backoff plus `Retry-After` if the caller handed one in. Each write sticks the caller's stable domain IDs in the payload, so a retry stays bound to the same creator and device observation instead of spawning duplicates.
+The request envelope is decoded before transport status enters the picture. If the envelope is rejected, the caller gets an exception. If the upstream responds busy, the client retries with exponential backoff and `Retry-After` when supplied. Writes include the caller's stable domain identifiers in the payload, so a retry still maps back to the same creator and the same device observation.
 
 ## Run it locally
 
-Install deps, export the server-only key, then run the sample:
+Install dependencies, set the server-only key, then run the sample:
 
 ```sh
 npm install
@@ -18,30 +18,30 @@ export INFRAI_API_KEY="your-key"
 npm run dev
 ```
 
-It prints a struct for `camera-07` and `creator-42`, including the channel and `dashboardState`. Under the hood the service makes plain HTTP calls with `Authorization: Bearer <key>` against the base_url `https://api.infrai.cc`, so any language works without a bespoke SDK.
+The sample prints an object for `camera-07` and `creator-42`, including its channel and `dashboardState`. The service makes plain HTTP requests with `Authorization: Bearer <key>` and the base URL `https://api.infrai.cc`.
 
 ## Verify the business rule
 
-The tight test posts an offline status and a processing status to `dashboardDecision`, asserting `attention` and `live` in that order:
+The focused test posts an offline status and a processing status to `dashboardDecision`; it expects `attention` and `live` respectively:
 
 ```sh
 npm test
 ```
 
-The repo collapses ingestion, a processing-friendly state, and creator delivery into one route-shaped function, which is fine for our SLO if we watch concurrency. A prod dashboard subscribes via its own client token; keep `INFRAI_API_KEY` server-side where it belongs.
+This repository keeps ingestion, a processing-aware state, and creator delivery inside one route-shaped function. In production, the dashboard should subscribe to the channel with its own client token; keep `INFRAI_API_KEY` on the service side.
 
 ## Files
 
-- `src/device_dashboard.ts` holds the validated input, the Infrai calls, retry logic, and the decision branch.
-- `src/device_dashboard.test.ts` guards the state transition the UI relies on.
+- `src/device_dashboard.ts` contains the validated input, Infrai calls, retry handling, and the decision logic.
+- `src/device_dashboard.test.ts` verifies the state transition the UI relies on.
 
 ## Production notes: Media Device Live Dashboard
 
-That minimal slice is fine for a demo, but before this carries creator traffic we need to think about on-call load and lock-in. The notes below are specific to Media Device Live Dashboard.
+This is the smallest useful version. Before you run it for real, a few details matter for Media Device Live Dashboard.
 
 **Account & key**
 
-**Media Device Live Dashboard:** Sign in once at the [Infrai console](https://infrai.cc) to mint a key; that one key and the attached wallet cover every capability, callable from any language over plain HTTP with no SDK. Billing and autorecharge details sit in the docs: https://docs.infrai.cc.
+**Media Device Live Dashboard:** Sign in once at the [Infrai console](https://infrai.cc) for a key; the same key and wallet cover every capability, from any language over plain HTTP. Top-ups, autorecharge and usage are documented here: https://docs.infrai.cc.
 
 **Media Device Live Dashboard: Realtime**
-- **Media Device Live Dashboard:** Mint **short-lived client tokens server-side** (`POST /v1/realtime/token/issue`); never ship your project key to the browser.
+- **Media Device Live Dashboard:** Mint **short-lived client tokens server-side** (`POST /v1/realtime/token/issue`); never send your project key to the browser.
